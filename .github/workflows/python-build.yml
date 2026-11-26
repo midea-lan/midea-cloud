@@ -1,0 +1,129 @@
+# This workflow runs on pull requests to the main branch and on published releases.
+# It checks commit messages, builds the Python package, runs tests, and deploys to PyPI for releases.
+name: PR and Python checks
+
+on:
+  # Trigger the workflow on push to main
+  push:
+    branches: ["main"]
+  # Trigger the workflow on pull requests to main
+  pull_request:
+    branches: ["main"]
+  # Trigger the workflow on published releases
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: PR Commit Messages Check
+    runs-on: ubuntu-latest
+    if: github.event_name != 'release'
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: wagoid/commitlint-github-action@v6.2.1
+        with:
+          configFile: commitlint.config.mjs
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'release'
+    env:
+      SKIP: no-commit-to-branch
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+      - uses: j178/prek-action@v3.1.1
+
+  build:
+    name: Python Build and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
+        os: ["windows-latest", "ubuntu-latest", "macos-latest"]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Extract UV version
+        run: |
+          echo "UV_VERSION=$(./scripts/get-pyproject-uv.version.sh)" >> "$GITHUB_ENV"
+        shell: bash
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          uv sync --frozen --all-groups --python ${{ matrix.python-version }}
+        shell: bash
+      - name: Activate virtualenv
+        # Expose the .venv to later steps by putting it on PATH. On Windows the
+        # venv layout is .venv/Scripts and GITHUB_PATH needs a native path
+        # (cygpath).
+        run: |
+          if [ -d .venv/bin ]; then
+            echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+            echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          else
+            cygpath -w "$PWD/.venv/Scripts" >> "$GITHUB_PATH"
+            cygpath -w "$PWD/.venv" | sed 's/^/VIRTUAL_ENV=/' >> "$GITHUB_ENV"
+          fi
+        shell: bash
+      - name: Build midea-cloud
+        run: python -m build
+        shell: bash
+      - name: Test with pytest
+        run: |
+          python -m pytest --rootdir . --cov=mideacloud --cov-report html --cov-report xml --junitxml=reports/junit/junit.xml ./tests/
+          mv htmlcov reports/coverage
+        shell: bash
+      - name: Upload coverage artifact
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  deploy:
+    name: Deploy Release to PyPI
+    needs: [build]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/midea-cloud
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Extract UV version
+        run: |
+          echo "UV_VERSION=$(./scripts/get-pyproject-uv.version.sh)" >> "$GITHUB_ENV"
+        shell: bash
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.14
+      - name: Build package
+        run: |
+          uv venv --python 3.14
+          uv pip install build
+          .venv/bin/python3 -m build
+        shell: bash
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1

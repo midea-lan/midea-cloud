@@ -1,0 +1,27 @@
+# This workflow uses the release-please GitHub Action to automate releases.
+# it only works on the main branch: PR mereged to main will trigger the release-please action
+# and PR will be created to update the version in the manifest file and create a release with the new version.
+on:
+  push:
+    branches:
+      - main
+
+name: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate token
+        uses: actions/create-github-app-token@v3
+        id: generate-token
+        with:
+          app-id: ${{ secrets.MIDEALANBOT_APP_ID }}
+          private-key: ${{ secrets.MIDEALANBOT_APP_PRIVATE_KEY }}
+          owner: midea-lan
+          repositories: midea-cloud
+      - uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ steps.generate-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

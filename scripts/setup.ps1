@@ -1,0 +1,70 @@
+# Bootstrap the midea-cloud development environment with uv (Windows PowerShell).
+#
+# Prerequisite: install uv first (https://docs.astral.sh/uv/getting-started/installation/):
+#   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+#
+# China Mainland users can point uv at a mirror before running this script, e.g.:
+#   $env:UV_DEFAULT_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
+#   $env:UV_PYTHON_INSTALL_MIRROR = "https://mirror.nju.edu.cn/github-release/astral-sh/python-build-standalone/"
+
+$ErrorActionPreference = "Stop"
+
+# Move to the repository root (parent of this script's directory).
+Set-Location (Join-Path $PSScriptRoot "..")
+
+# Always use this repo's .venv, even if the shell exports another project's
+# environment (e.g. a shared devcontainer)
+$env:UV_PROJECT_ENVIRONMENT = Join-Path (Get-Location) ".venv"
+$env:VIRTUAL_ENV = $env:UV_PROJECT_ENVIRONMENT
+
+# Use copy mode for UV to avoid hardlink warnings on different filesystems
+$env:UV_LINK_MODE = "copy"
+
+# Add default VS Code settings if not existing.
+if (-not (Test-Path ".vscode\settings.json")) {
+    Write-Host "Copying .vscode\settings.default.jsonc to .vscode\settings.json..."
+    Copy-Item ".vscode\settings.default.jsonc" ".vscode\settings.json"
+}
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Error "'uv' is not installed. Install it: powershell -c `"irm https://astral.sh/uv/install.ps1 | iex`""
+    exit 1
+}
+
+# Create .venv and install runtime + dev dependencies
+# (uv downloads Python 3.12 if needed).
+Write-Host "Syncing virtual environment (.venv) with Python 3.12..."
+uv sync --frozen --all-groups --python 3.12
+
+# Activate it so the tools below resolve to this project's .venv.
+& .venv\Scripts\Activate.ps1
+
+# prek is a global uv tool, not a project dependency.
+if (-not (Get-Command prek -ErrorAction SilentlyContinue)) {
+    Write-Host "Installing prek..."
+    uv tool install prek
+}
+
+# Install the git hooks (commit + commit-msg stages).
+Write-Host "Installing prek hooks..."
+prek install --overwrite
+prek install --hook-type commit-msg --overwrite
+
+# Shim so muscle-memory `pre-commit` invocations still work, backed by prek.
+Set-Content -Path ".venv\Scripts\pre-commit.cmd" -Value "@echo off`r`nprek %*"
+
+# commitlint (a commit-msg hook) needs its shared config; install it if npm exists.
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+    Write-Host "Installing @commitlint/config-conventional..."
+    npm ci
+} else {
+    Write-Warning "'npm' not found - skipping @commitlint/config-conventional."
+    Write-Warning "Install Node.js if the commitlint commit-msg hook fails."
+}
+
+Write-Host ""
+Write-Host "Done. The environment is active in this shell. In new shells, activate with:"
+Write-Host "  .venv\Scripts\Activate.ps1"
+Write-Host "Then run tools directly, e.g.:"
+Write-Host "  python -m pytest ./tests/"
+Write-Host "  prek run --all-files"
