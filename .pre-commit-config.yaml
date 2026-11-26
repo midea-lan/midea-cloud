@@ -55,4 +55,6 @@ repos:
         args: [--scripts-are-modules]
         pass_filenames: false
         additional_dependencies:
+          - aiohttp==3.14.5
+          - pycryptodome==4.6.0
           - pytest==9.2.0
