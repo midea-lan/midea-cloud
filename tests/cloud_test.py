@@ -379,6 +379,113 @@ async def test_concurrent_requests_share_relogin(
     assert len(request_bodies(mocked, MEIJU_LOGIN)) == 2
 
 
+async def test_waiting_request_logs_in_after_failed_relogin(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+) -> None:
+    """Test a request waiting on a failed re-login logs in itself."""
+    mock_meiju_login(mocked)
+    await meiju.login()
+    mocked.post(MEIJU_STATUS, payload=reply(code=40002), repeat=2)
+    mocked.post(MEIJU_API + "/v1/user/login/id/get", exception=ClientError("boom"))
+    mock_meiju_login(mocked, TEST_NEW_ACCESS_TOKEN)
+    mocked.post(MEIJU_STATUS, payload=reply({"power": "on"}))
+
+    results = await asyncio.gather(
+        meiju.get_device_status(APPLIANCE),
+        meiju.get_device_status(APPLIANCE),
+        return_exceptions=True,
+    )
+
+    assert isinstance(results[0], MideaCloudConnectionError)
+    assert results[1] == {"power": "on"}
+    assert request_headers(mocked, MEIJU_STATUS)[-1]["accesstoken"] == (
+        TEST_NEW_ACCESS_TOKEN
+    )
+
+
+@pytest.mark.parametrize(
+    ("cloud_fixture", "api_url", "login_data"),
+    [
+        pytest.param("meiju", MEIJU_API, {}, id="meiju_missing_fields"),
+        pytest.param(
+            "meiju",
+            MEIJU_API,
+            {"key": "not-hex", "mdata": {"accessToken": TEST_ACCESS_TOKEN}},
+            id="meiju_invalid_key",
+        ),
+        pytest.param("msmarthome", MSMARTHOME_API, {}, id="msmarthome_missing_fields"),
+        pytest.param(
+            "msmarthome",
+            MSMARTHOME_API,
+            {
+                "uid": TEST_UID,
+                "accessToken": "not-hex",
+                "randomData": "not-hex",
+                "mdata": {"accessToken": TEST_ACCESS_TOKEN},
+            },
+            id="msmarthome_invalid_key",
+        ),
+    ],
+)
+async def test_invalid_login_reply(
+    mocked: MockedCloud,
+    request: pytest.FixtureRequest,
+    cloud_fixture: str,
+    api_url: str,
+    login_data: dict[str, Any],
+) -> None:
+    """Test a malformed login reply is raised as a connection error."""
+    cloud: MeijuCloud | MSmartHomeCloud = request.getfixturevalue(cloud_fixture)
+    mocked.post(MSMARTHOME_API + "/v1/unitcenter/router/user/name", payload=reply())
+    mocked.post(
+        api_url + "/v1/user/login/id/get",
+        payload=reply({"loginId": TEST_LOGIN_ID}),
+    )
+    mocked.post(api_url + "/mj/user/login", payload=reply(login_data))
+
+    with pytest.raises(MideaCloudConnectionError):
+        await cloud.login()
+
+
+@pytest.mark.parametrize(
+    ("sn", "sn8"),
+    [
+        pytest.param("0" * 9 + "ABCDEFGH", "ABCDEFGH", id="sn8_at_end"),
+        pytest.param("0" * 9 + "ABCDEFG", "", id="too_short"),
+    ],
+)
+async def test_msmarthome_sn8(
+    mocked: MockedCloud,
+    msmarthome: MSmartHomeCloud,
+    sn: str,
+    sn8: str,
+) -> None:
+    """Test the MSmartHome sn8 is cut from the serial number when long enough."""
+    mock_msmarthome_login(mocked)
+    mocked.post(
+        MSMARTHOME_REGIONAL_API + "/v1/appliance/user/list/get",
+        payload=reply(
+            {
+                "list": [
+                    {
+                        "id": "2",
+                        "name": "Dehumidifier",
+                        "type": "0xA1",
+                        "sn": msmarthome_encrypt_sn(sn),
+                    },
+                ],
+            },
+        ),
+    )
+
+    await msmarthome.login()
+    appliances = await msmarthome.list_appliances()
+
+    assert appliances[2].sn8 == sn8
+    assert appliances[2].model == sn8
+
+
 async def test_expired_token_during_login_not_retried(
     mocked: MockedCloud,
     meiju: MeijuCloud,
@@ -430,6 +537,7 @@ async def test_connection_error(
         pytest.param("not json", id="not_json"),
         pytest.param('{"msg": "no code"}', id="no_code"),
         pytest.param("[]", id="not_object"),
+        pytest.param('{"code": 0, "data": ["unexpected"]}', id="data_not_object"),
     ],
 )
 async def test_invalid_reply(

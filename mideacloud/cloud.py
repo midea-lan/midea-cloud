@@ -111,7 +111,7 @@ class MideaCloud(ABC):
     async def _ensure_login(self, expired_token: str | None) -> None:
         async with self._login_lock:
             # Another request may have logged in while this one waited.
-            if self._access_token == expired_token:
+            if self._access_token in (None, expired_token):
                 self._access_token = None
                 await self.login()
 
@@ -154,7 +154,10 @@ class MideaCloud(ABC):
             ) from err
         _LOGGER.debug("Midea cloud %s replied with code %s", endpoint, code)
         if code == 0:
-            return cast("dict[str, Any]", reply.get("data") or {})
+            data = reply.get("data") or {}
+            if not isinstance(data, dict):
+                raise MideaCloudConnectionError(f"Invalid reply from {endpoint}")
+            return data
         message = str(reply.get("msg") or reply.get("message") or "")
         if endpoint == self._status_endpoint and _is_lua_analysis_error(
             code,
@@ -269,9 +272,15 @@ class MeijuCloud(MideaCloud):
             data,
             authenticated=False,
         )
-        key = self._security.aes_decrypt_with_fixed_key(bytes.fromhex(response["key"]))
+        try:
+            access_token = response["mdata"]["accessToken"]
+            key = self._security.aes_decrypt_with_fixed_key(
+                bytes.fromhex(response["key"]),
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            raise MideaCloudConnectionError("Invalid login reply") from err
         self._security.set_aes_keys(key.encode("ascii"), None)
-        self._access_token = response["mdata"]["accessToken"]
+        self._access_token = access_token
 
     async def list_appliances(self) -> dict[int, MideaCloudAppliance]:
         """Return the appliances of every home of the account."""
@@ -405,12 +414,17 @@ class MSmartHomeCloud(MideaCloud):
             data,
             authenticated=False,
         )
-        self._msmart_security.set_encrypted_aes_keys(
-            response["accessToken"],
-            response["randomData"],
-        )
-        self._uid = response["uid"]
-        self._access_token = response["mdata"]["accessToken"]
+        try:
+            uid = response["uid"]
+            access_token = response["mdata"]["accessToken"]
+            self._msmart_security.set_encrypted_aes_keys(
+                response["accessToken"],
+                response["randomData"],
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            raise MideaCloudConnectionError("Invalid login reply") from err
+        self._uid = uid
+        self._access_token = access_token
 
     async def list_appliances(self) -> dict[int, MideaCloudAppliance]:
         """Return the appliances of the account."""
@@ -426,7 +440,7 @@ class MSmartHomeCloud(MideaCloud):
 
     def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
         sn = self._decrypt_sn(appliance.get("sn"))
-        sn8 = sn[SN8_START:SN8_END] if len(sn) > SN8_END else ""
+        sn8 = sn[SN8_START:SN8_END] if len(sn) >= SN8_END else ""
         return MideaCloudAppliance(
             appliance_code=int(appliance["id"]),
             name=appliance["name"],
