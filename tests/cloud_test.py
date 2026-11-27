@@ -32,9 +32,15 @@ from .common import (
     request_headers,
 )
 from .const import (
+    APPLIANCE,
     MEIJU_API,
+    MEIJU_CONTROL,
+    MEIJU_LOGIN,
+    MEIJU_STATUS,
     MSMARTHOME_API,
+    MSMARTHOME_CONTROL,
     MSMARTHOME_REGIONAL_API,
+    MSMARTHOME_STATUS,
     TEST_ACCESS_TOKEN,
     TEST_ACCOUNT,
     TEST_APPLIANCE_CODE,
@@ -45,26 +51,6 @@ from .const import (
     TEST_SN,
     TEST_SN8,
     TEST_UID,
-)
-
-MEIJU_STATUS = MEIJU_API + "/mjl/v1/device/status/lua/get"
-MEIJU_CONTROL = MEIJU_API + "/mjl/v1/device/lua/control"
-MEIJU_LOGIN = MEIJU_API + "/mj/user/login"
-MSMARTHOME_STATUS = MSMARTHOME_REGIONAL_API + "/v1/device/status/lua/get"
-MSMARTHOME_CONTROL = MSMARTHOME_REGIONAL_API + "/v1/device/lua/control"
-
-APPLIANCE = MideaCloudAppliance(
-    appliance_code=TEST_APPLIANCE_CODE,
-    name="Living room",
-    appliance_type=0xAC,
-    sn=TEST_SN,
-    sn8=TEST_SN8,
-    model=TEST_SN8,
-    model_number="12",
-    manufacturer_code="0000",
-    smart_product_id="10001",
-    category="AC",
-    online=True,
 )
 
 pytestmark = pytest.mark.asyncio
