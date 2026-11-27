@@ -60,6 +60,7 @@ class MideaCloudDevice:
         self._cloud = cloud
         self.appliance = appliance
         self._attributes: dict[str, Any] = {}
+        self._reported_fields: set[str] = set()
         self._unsupported_queries: set[int] = set()
 
     @property
@@ -84,12 +85,15 @@ class MideaCloudDevice:
                 self._unsupported_queries.add(index)
                 continue
             self._attributes.update(status)
+            self._reported_fields.update(status)
 
     async def async_set(self, control: dict[str, Any]) -> None:
         """Send the control fields the appliance reports and store them."""
-        if self._attributes:
+        if self._reported_fields:
             control = {
-                key: value for key, value in control.items() if key in self._attributes
+                key: value
+                for key, value in control.items()
+                if key in self._reported_fields
             }
         if not control:
             return

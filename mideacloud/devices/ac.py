@@ -179,7 +179,8 @@ class MideaCloudACDevice(MideaCloudDevice):
 
     async def async_set_preset(self, preset: ACPreset) -> None:
         """Set the preset."""
-        await self.async_set(dict(_PRESETS[preset]))
+        # Clear the other presets' fields so only the requested one stays active.
+        await self.async_set(_PRESETS[ACPreset.NONE] | _PRESETS[preset])
 
     async def async_set_swing_mode(self, swing_mode: ACSwingMode) -> None:
         """Set the louver swing."""

@@ -203,7 +203,12 @@ async def test_ac_value_formats(
         pytest.param(
             "async_set_preset",
             (ACPreset.BOOST,),
-            {"strong_wind": "on"},
+            {
+                "eco": "off",
+                "comfort_power_save": "off",
+                "cool_power_saving": 0,
+                "strong_wind": "on",
+            },
             id="preset_boost",
         ),
         pytest.param(
@@ -269,6 +274,41 @@ async def test_control_without_status_sends_everything(
 
     assert request_bodies(mocked, MEIJU_CONTROL)[0]["command"] == {
         "control": {"wind_swing_lr": "off", "wind_swing_ud": "off"},
+    }
+
+
+async def test_preset_replaces_previous_preset(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+) -> None:
+    """Test selecting a preset turns the previous one off."""
+    device = await _refreshed_ac(
+        mocked,
+        meiju,
+        STATUS | {"eco": "on", "cool_power_saving": 1},
+    )
+    mocked.post(MEIJU_CONTROL, payload=reply())
+
+    await device.async_set_preset(ACPreset.BOOST)
+
+    assert device.preset is ACPreset.BOOST
+
+
+async def test_controls_before_refresh_are_not_filtered(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+) -> None:
+    """Test fields sent before the first refresh do not limit later controls."""
+    mock_meiju_login(mocked)
+    mocked.post(MEIJU_CONTROL, payload=reply(), repeat=2)
+    device = MideaCloudACDevice(meiju, APPLIANCE)
+
+    await device.async_set_mode(ACMode.COOL)
+    await device.async_set_target_temperature(22.5)
+
+    assert request_bodies(mocked, MEIJU_CONTROL)[1]["command"]["control"] == {
+        "temperature": 22,
+        "small_temperature": 0.5,
     }
 
 
