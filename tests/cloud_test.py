@@ -532,7 +532,7 @@ async def test_http_error_keeps_cloud_error_code(
         pytest.param("not-an-object", id="not_object"),
     ],
 )
-async def test_msmarthome_invalid_appliance_list(
+async def test_msmarthome_invalid_appliance(
     mocked: MockedCloud,
     msmarthome: MSmartHomeCloud,
     appliance: object,
@@ -548,13 +548,37 @@ async def test_msmarthome_invalid_appliance_list(
         await msmarthome.list_appliances()
 
 
+async def test_msmarthome_invalid_appliance_list(
+    mocked: MockedCloud,
+    msmarthome: MSmartHomeCloud,
+) -> None:
+    """Test a MSmartHome appliance list that is not a list is a connection error."""
+    mock_msmarthome_login(mocked)
+    mocked.post(
+        MSMARTHOME_REGIONAL_API + "/v1/appliance/user/list/get",
+        payload=reply({"list": 1}),
+    )
+
+    with pytest.raises(MideaCloudConnectionError):
+        await msmarthome.list_appliances()
+
+
 @pytest.mark.parametrize(
-    ("home", "appliance"),
+    ("home", "appliance_reply"),
     [
-        pytest.param({}, None, id="missing_home_id"),
+        pytest.param({}, {}, id="missing_home_id"),
         pytest.param(
             {"homegroupId": TEST_HOME_ID},
-            {"name": "x", "type": "0xA1"},
+            {"homeList": [None]},
+            id="home_not_object",
+        ),
+        pytest.param(
+            {"homegroupId": TEST_HOME_ID},
+            {
+                "homeList": [
+                    {"roomList": [{"applianceList": [{"name": "x", "type": "0xA1"}]}]},
+                ],
+            },
             id="missing_appliance_code",
         ),
     ],
@@ -563,9 +587,9 @@ async def test_meiju_invalid_appliance_list(
     mocked: MockedCloud,
     meiju: MeijuCloud,
     home: dict[str, Any],
-    appliance: dict[str, Any] | None,
+    appliance_reply: dict[str, Any],
 ) -> None:
-    """Test a malformed Meiju home or appliance entry is a connection error."""
+    """Test a malformed Meiju home or appliance list is a connection error."""
     mock_meiju_login(mocked)
     mocked.post(
         MEIJU_API + "/v1/homegroup/list/get",
@@ -573,9 +597,7 @@ async def test_meiju_invalid_appliance_list(
     )
     mocked.post(
         MEIJU_API + "/v1/appliance/home/list/get",
-        payload=reply(
-            {"homeList": [{"roomList": [{"applianceList": [appliance]}]}]},
-        ),
+        payload=reply(appliance_reply),
     )
 
     with pytest.raises(MideaCloudConnectionError):

@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import UTC, datetime
 from secrets import token_hex
 from typing import Any, cast
@@ -53,6 +54,10 @@ def _is_lua_analysis_error(code: int, message: str) -> bool:
         or "lua analysis exception" in lowered
         or ".lua:" in lowered
     )
+
+
+def _home_ids(reply: dict[str, Any]) -> list[Any]:
+    return [home["homegroupId"] for home in reply.get("homeList") or []]
 
 
 class MideaCloud(ABC):
@@ -196,17 +201,18 @@ class MideaCloud(ABC):
     async def list_appliances(self) -> dict[int, MideaCloudAppliance]:
         """Return the appliances of the account, by appliance code."""
 
-    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
+    @staticmethod
+    def _parse_list_reply[T](
+        parse: Callable[[dict[str, Any]], T],
+        reply: dict[str, Any],
+    ) -> T:
         try:
-            return self._appliance_from_reply(appliance)
+            return parse(reply)
         except (AttributeError, KeyError, TypeError, ValueError) as err:
             raise MideaCloudConnectionError("Invalid appliance list reply") from err
 
     @abstractmethod
-    def _appliance_from_reply(
-        self,
-        appliance: dict[str, Any],
-    ) -> MideaCloudAppliance:
+    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
         """Return the appliance described by an appliance list entry."""
 
     @abstractmethod
@@ -304,26 +310,27 @@ class MeijuCloud(MideaCloud):
         """Return the appliances of every home of the account."""
         homes = await self._api_request("/v1/homegroup/list/get", {})
         appliances: dict[int, MideaCloudAppliance] = {}
-        for home in homes.get("homeList") or []:
-            try:
-                home_id = home["homegroupId"]
-            except (KeyError, TypeError) as err:
-                raise MideaCloudConnectionError("Invalid home list reply") from err
+        for home_id in self._parse_list_reply(_home_ids, homes):
             response = await self._api_request(
                 "/v1/appliance/home/list/get",
                 {"homegroupId": home_id},
             )
-            for home_data in response.get("homeList") or []:
-                for room in home_data.get("roomList") or []:
-                    for appliance in room.get("applianceList") or []:
-                        parsed = self._parse_appliance(appliance)
-                        appliances[parsed.appliance_code] = parsed
+            appliances |= self._parse_list_reply(self._home_appliances, response)
         return appliances
 
-    def _appliance_from_reply(
+    def _home_appliances(
         self,
-        appliance: dict[str, Any],
-    ) -> MideaCloudAppliance:
+        reply: dict[str, Any],
+    ) -> dict[int, MideaCloudAppliance]:
+        appliances: dict[int, MideaCloudAppliance] = {}
+        for home in reply.get("homeList") or []:
+            for room in home.get("roomList") or []:
+                for appliance in room.get("applianceList") or []:
+                    parsed = self._parse_appliance(appliance)
+                    appliances[parsed.appliance_code] = parsed
+        return appliances
+
+    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
         sn8 = appliance.get("sn8") or DEFAULT_SN8
         return MideaCloudAppliance(
             appliance_code=int(appliance["applianceCode"]),
@@ -457,16 +464,19 @@ class MSmartHomeCloud(MideaCloud):
             "/v1/appliance/user/list/get",
             self._make_general_data(),
         )
+        return self._parse_list_reply(self._user_appliances, response)
+
+    def _user_appliances(
+        self,
+        reply: dict[str, Any],
+    ) -> dict[int, MideaCloudAppliance]:
         appliances: dict[int, MideaCloudAppliance] = {}
-        for appliance in response.get("list") or []:
+        for appliance in reply.get("list") or []:
             parsed = self._parse_appliance(appliance)
             appliances[parsed.appliance_code] = parsed
         return appliances
 
-    def _appliance_from_reply(
-        self,
-        appliance: dict[str, Any],
-    ) -> MideaCloudAppliance:
+    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
         sn = self._decrypt_sn(appliance.get("sn"))
         sn8 = sn[SN8_START:SN8_END] if len(sn) >= SN8_END else ""
         return MideaCloudAppliance(
