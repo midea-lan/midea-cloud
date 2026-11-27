@@ -1,6 +1,7 @@
 """Midea Cloud client tests."""
 
 import asyncio
+from http import HTTPStatus
 from typing import Any
 from unittest.mock import Mock
 
@@ -484,6 +485,101 @@ async def test_msmarthome_sn8(
 
     assert appliances[2].sn8 == sn8
     assert appliances[2].model == sn8
+
+
+async def test_http_error_with_success_code(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+) -> None:
+    """Test a success code in an HTTP error reply is not trusted."""
+    mock_meiju_login(mocked)
+    mocked.post(
+        MEIJU_CONTROL,
+        payload=reply({}),
+        status=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
+
+    with pytest.raises(MideaCloudConnectionError):
+        await meiju.send_device_control(APPLIANCE, {"power": "off"})
+
+
+async def test_http_error_keeps_cloud_error_code(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+) -> None:
+    """Test an expired token reported with an HTTP error still logs in again."""
+    mock_meiju_login(mocked)
+    mocked.post(
+        MEIJU_STATUS,
+        payload=reply(code=40002),
+        status=HTTPStatus.UNAUTHORIZED,
+    )
+    mock_meiju_login(mocked, TEST_NEW_ACCESS_TOKEN)
+    mocked.post(MEIJU_STATUS, payload=reply({"power": "on"}))
+
+    assert await meiju.get_device_status(APPLIANCE) == {"power": "on"}
+
+
+@pytest.mark.parametrize(
+    "appliance",
+    [
+        pytest.param({"name": "x", "type": "0xA1"}, id="missing_id"),
+        pytest.param({"id": "2", "name": "x", "type": "A1x"}, id="invalid_type"),
+        pytest.param(
+            {"id": "2", "name": "x", "type": "0xA1", "sn": "zz"},
+            id="invalid_sn",
+        ),
+        pytest.param("not-an-object", id="not_object"),
+    ],
+)
+async def test_msmarthome_invalid_appliance_list(
+    mocked: MockedCloud,
+    msmarthome: MSmartHomeCloud,
+    appliance: object,
+) -> None:
+    """Test a malformed MSmartHome appliance entry is a connection error."""
+    mock_msmarthome_login(mocked)
+    mocked.post(
+        MSMARTHOME_REGIONAL_API + "/v1/appliance/user/list/get",
+        payload=reply({"list": [appliance]}),
+    )
+
+    with pytest.raises(MideaCloudConnectionError):
+        await msmarthome.list_appliances()
+
+
+@pytest.mark.parametrize(
+    ("home", "appliance"),
+    [
+        pytest.param({}, None, id="missing_home_id"),
+        pytest.param(
+            {"homegroupId": TEST_HOME_ID},
+            {"name": "x", "type": "0xA1"},
+            id="missing_appliance_code",
+        ),
+    ],
+)
+async def test_meiju_invalid_appliance_list(
+    mocked: MockedCloud,
+    meiju: MeijuCloud,
+    home: dict[str, Any],
+    appliance: dict[str, Any] | None,
+) -> None:
+    """Test a malformed Meiju home or appliance entry is a connection error."""
+    mock_meiju_login(mocked)
+    mocked.post(
+        MEIJU_API + "/v1/homegroup/list/get",
+        payload=reply({"homeList": [home]}),
+    )
+    mocked.post(
+        MEIJU_API + "/v1/appliance/home/list/get",
+        payload=reply(
+            {"homeList": [{"roomList": [{"applianceList": [appliance]}]}]},
+        ),
+    )
+
+    with pytest.raises(MideaCloudConnectionError):
+        await meiju.list_appliances()
 
 
 async def test_expired_token_during_login_not_retried(

@@ -141,6 +141,7 @@ class MideaCloud(ABC):
                 timeout=ClientTimeout(total=REQUEST_TIMEOUT),
             ) as response:
                 raw = await response.read()
+                http_ok = response.ok
         except (ClientError, TimeoutError) as err:
             raise MideaCloudConnectionError(
                 f"Error requesting {endpoint}: {err!r}",
@@ -154,6 +155,10 @@ class MideaCloud(ABC):
             ) from err
         _LOGGER.debug("Midea cloud %s replied with code %s", endpoint, code)
         if code == 0:
+            if not http_ok:
+                raise MideaCloudConnectionError(
+                    f"HTTP error from {endpoint} with a success code",
+                )
             data = reply.get("data") or {}
             if not isinstance(data, dict):
                 raise MideaCloudConnectionError(f"Invalid reply from {endpoint}")
@@ -190,6 +195,19 @@ class MideaCloud(ABC):
     @abstractmethod
     async def list_appliances(self) -> dict[int, MideaCloudAppliance]:
         """Return the appliances of the account, by appliance code."""
+
+    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
+        try:
+            return self._appliance_from_reply(appliance)
+        except (AttributeError, KeyError, TypeError, ValueError) as err:
+            raise MideaCloudConnectionError("Invalid appliance list reply") from err
+
+    @abstractmethod
+    def _appliance_from_reply(
+        self,
+        appliance: dict[str, Any],
+    ) -> MideaCloudAppliance:
+        """Return the appliance described by an appliance list entry."""
 
     @abstractmethod
     def _command_data(self, appliance: MideaCloudAppliance) -> dict[str, Any]:
@@ -287,9 +305,13 @@ class MeijuCloud(MideaCloud):
         homes = await self._api_request("/v1/homegroup/list/get", {})
         appliances: dict[int, MideaCloudAppliance] = {}
         for home in homes.get("homeList") or []:
+            try:
+                home_id = home["homegroupId"]
+            except (KeyError, TypeError) as err:
+                raise MideaCloudConnectionError("Invalid home list reply") from err
             response = await self._api_request(
                 "/v1/appliance/home/list/get",
-                {"homegroupId": home["homegroupId"]},
+                {"homegroupId": home_id},
             )
             for home_data in response.get("homeList") or []:
                 for room in home_data.get("roomList") or []:
@@ -298,7 +320,10 @@ class MeijuCloud(MideaCloud):
                         appliances[parsed.appliance_code] = parsed
         return appliances
 
-    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
+    def _appliance_from_reply(
+        self,
+        appliance: dict[str, Any],
+    ) -> MideaCloudAppliance:
         sn8 = appliance.get("sn8") or DEFAULT_SN8
         return MideaCloudAppliance(
             appliance_code=int(appliance["applianceCode"]),
@@ -438,7 +463,10 @@ class MSmartHomeCloud(MideaCloud):
             appliances[parsed.appliance_code] = parsed
         return appliances
 
-    def _parse_appliance(self, appliance: dict[str, Any]) -> MideaCloudAppliance:
+    def _appliance_from_reply(
+        self,
+        appliance: dict[str, Any],
+    ) -> MideaCloudAppliance:
         sn = self._decrypt_sn(appliance.get("sn"))
         sn8 = sn[SN8_START:SN8_END] if len(sn) >= SN8_END else ""
         return MideaCloudAppliance(

@@ -5,6 +5,7 @@ import json
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from hashlib import sha256
+from http import HTTPStatus
 from types import TracebackType
 from typing import Any, Self
 
@@ -40,9 +41,15 @@ class Request:
 
 
 class _Response:
-    def __init__(self, raw: bytes | None, exception: Exception | None) -> None:
+    def __init__(
+        self,
+        raw: bytes | None,
+        exception: Exception | None,
+        status: int,
+    ) -> None:
         self._raw = raw
         self._exception = exception
+        self.ok = status < HTTPStatus.BAD_REQUEST
 
     async def __aenter__(self) -> Self:
         # Yield like a real network round trip so concurrent requests interleave.
@@ -79,12 +86,13 @@ class MockedCloud:
         payload: object = None,
         body: str | None = None,
         exception: Exception | None = None,
+        status: int = HTTPStatus.OK,
         repeat: int = 1,
     ) -> None:
         """Queue the reply to the next request to a URL."""
         raw = body.encode() if body is not None else json.dumps(payload).encode()
         for _ in range(repeat):
-            self._replies[url].append(_Response(raw, exception))
+            self._replies[url].append(_Response(raw, exception, status))
 
     def session_post(
         self,
